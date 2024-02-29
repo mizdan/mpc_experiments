@@ -21,7 +21,7 @@ dock_instance = Dock()
 surface = pygame.Surface((50, 20), pygame.SRCALPHA)
 surface.fill("black")
 
-player = Player(surface, *screen.get_rect().center, np.array([100, 500, np.deg2rad(180)]))
+player = Player(surface, 288, 400)
 pygame.display.flip()
 
 dt = 0.05
@@ -42,25 +42,7 @@ while run:
 
     player.draw(screen)
     pygame.display.flip()
-    clock.tick(20)
+    clock.tick(5)
 
 pygame.quit()
-
-plt.figure(1)
-plt.grid(True)
-plt.xlabel('Discrete time step (k)')
-plt.suptitle('theta')
-plt.plot(player.theta_model)
-
-plt.figure(2)
-plt.grid(True)
-plt.xlabel('Discrete time step (k)')
-plt.suptitle('angular_vell')
-plt.plot(player.angular_vell)
-plt.figure(3)
-plt.grid(True)
-plt.xlabel('Discrete time step (k)')
-plt.suptitle('lin_vel')
-plt.plot(player.lin_vell)
-plt.show()
 
