@@ -1,3 +1,5 @@
+import os
+
 import pygame
 from Shapes import Dock
 from Shapes import Player
@@ -9,24 +11,22 @@ width = 800
 height = 600
 #draw_bg
 BG = (144, 201, 120)
+
 def draw_bg():
     screen.fill(BG)
 
+
 screen = pygame.display.set_mode((800, 600))
 pygame.display.set_caption('MPC Simulation')
-
 clock = pygame.time.Clock()
 dock_instance = Dock()
 
-surface = pygame.Surface((50, 20), pygame.SRCALPHA)
-surface.fill("black")
+image_path = os.path.join(os.getcwd(), "bot.png")
+image = pygame.image.load(image_path)
 
-player = Player(surface, 288, 400)
+player = Player(image, 300, 400)
 pygame.display.flip()
 
-dt = 0.05
-vl = 0
-vr = 0
 run = True
 
 
@@ -42,7 +42,8 @@ while run:
 
     player.draw(screen)
     pygame.display.flip()
-    clock.tick(5)
+    clock.tick(15)
 
 pygame.quit()
+
 
