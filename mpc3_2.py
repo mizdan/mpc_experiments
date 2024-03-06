@@ -12,13 +12,13 @@ C = np.eye(3)  # Assuming output equals state for simplicity
 # Define cost matrices and prediction horizon
 Q = np.diag([1, 1, 1])  # State cost
 R = np.diag([1, 1])     # Control input cost
-N = 10                   # Prediction horizon
+N = 10              # Prediction horizon
 
 # Initial state and reference trajectory
 
 reference_trajectory = np.zeros((199, 3))
 for xx in range(0, 50):
-    reference_trajectory[xx] = (300+xx, 400-xx, np.pi/4)
+    reference_trajectory[xx] = (300+xx, 400-xx, np.pi/2)
 
 
 # Control input constraints (linear speed and angular speed)
@@ -28,7 +28,7 @@ v_max, omega_max = 5, 0.5
 # Simulation parameters
 num_steps = 50
 x_sim = np.zeros((num_steps + 1, 3))
-x_sim[0] = [288, 400, 0]
+x_sim[0] = [200, 300, 0]
 u_sim = np.zeros((num_steps, 2))
 
 # Define variables for optimization
