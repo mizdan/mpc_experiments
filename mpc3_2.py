@@ -1,89 +1,262 @@
+from time import time
+import casadi as ca
 import numpy as np
-import cvxpy as cp
+from casadi import sin, cos, pi
 import matplotlib.pyplot as plt
-import math
+from simulation_code import simulate
 
-# Define system matrices
-A = np.array([[1.0, 0, 0],
-              [0, 1.0, 0],
-              [0, 0, 1.0]])
-C = np.eye(3)  # Assuming output equals state for simplicity
+# setting matrix_weights' variables
+Q_x = 100
+Q_y = 100
+Q_theta = 2000
+R1 = 1
+R2 = 1
+R3 = 1
+R4 = 1
 
-# Define cost matrices and prediction horizon
-Q = np.diag([1, 1, 1])  # State cost
-R = np.diag([1, 1])     # Control input cost
-N = 10              # Prediction horizon
+step_horizon = 0.1  # time between steps in seconds
+N = 10              # number of look ahead steps
+rob_diam = 0.3      # diameter of the robot
+wheel_radius = 1    # wheel radius
+Lx = 0.3            # L in J Matrix (half robot x-axis length)
+Ly = 0.3            # l in J Matrix (half robot y-axis length)
+sim_time = 200      # simulation time
 
-# Initial state and reference trajectory
+# specs
+x_init = 0
+y_init = 0
+theta_init = 0
+x_target = 15
+y_target = 10
+theta_target = 0
 
-reference_trajectory = np.zeros((199, 3))
-for xx in range(0, 50):
-    reference_trajectory[xx] = (300+xx, 400-xx, np.pi/2)
+v_max = 1
+v_min = -1
 
 
-# Control input constraints (linear speed and angular speed)
-v_min, omega_min = -5, -0.5
-v_max, omega_max = 5, 0.5
+def shift_timestep(step_horizon, t0, state_init, u, f):
+    f_value = f(state_init, u[:, 0])
+    next_state = ca.DM.full(state_init + (step_horizon * f_value))
 
-# Simulation parameters
-num_steps = 50
-x_sim = np.zeros((num_steps + 1, 3))
-x_sim[0] = [200, 300, 0]
-u_sim = np.zeros((num_steps, 2))
+    t0 = t0 + step_horizon
+    u0 = ca.horzcat(
+        u[:, 1:],
+        ca.reshape(u[:, -1], -1, 1)
+    )
+    return t0, next_state, u0
 
-# Define variables for optimization
-x = cp.Variable((N+1, 3))
-u = cp.Variable((N, 2))
 
-for k in range(num_steps):
-    B = np.array([[np.cos(x_sim[k][2]), 0],
-                  [-np.sin(x_sim[k][2]), 0],
-                  [0, 1]])
+def DM2Arr(dm):
+    return np.array(dm.full())
 
-    min_distance = np.inf
-    k_min = None
-    current_distance = 0
-    for idx in range(-5, 5):
-        if 0 <= k + idx < len(x_sim) and k + idx < len(reference_trajectory):
-            dx = reference_trajectory[k + idx][0] - x_sim[k + idx][0]
-            dy = reference_trajectory[k + idx][1] - x_sim[k + idx][1]
-            current_distance = dx ** 2 + dy ** 2
-        if current_distance < min_distance:
-            min_distance = current_distance
-            k_min = k
 
-    cost = 0
-    print(k)
-    for i in range(N):
-        cost += cp.quad_form(x[i] - reference_trajectory[int(k + i)], Q) + cp.quad_form(u[i], R)
+# state symbolic variables
+x = ca.SX.sym('x')
+y = ca.SX.sym('y')
+theta = ca.SX.sym('theta')
+states = ca.vertcat(
+    x,
+    y,
+    theta
+)
+n_states = states.numel()
 
-    # Define constraints
-    constraints = [x[0] == x_sim[k]]
-    for i in range(N):
-        constraints += [x[i + 1] == A @ x[i] + B @ u[i]]
-        constraints += [u[i, 0] >= v_min, u[i, 0] <= v_max]          # Linear speed constraint
-        constraints += [u[i, 1] >= omega_min, u[i, 1] <= omega_max]  # Angular speed constraint
+# control symbolic variables
+V_a = ca.SX.sym('V_a')
+V_b = ca.SX.sym('V_b')
+V_c = ca.SX.sym('V_c')
+V_d = ca.SX.sym('V_d')
+controls = ca.vertcat(
+    V_a,
+    V_b,
+    V_c,
+    V_d
+)
+n_controls = controls.numel()
 
-    # Create and solve the optimization problem
-    problem = cp.Problem(cp.Minimize(cost), constraints)
-    problem.solve()
+# matrix containing all states over all time steps +1 (each column is a state vector)
+X = ca.SX.sym('X', n_states, N + 1)
 
-    # Get the optimal control input
-    optimal_u = u.value[0]
-    # Simulate the system with the optimal control input
-    x_sim[k + 1] = A @ x_sim[k] + B @ optimal_u
-    u_sim[k] = optimal_u
+# matrix containing all control actions over all time steps (each column is an action vector)
+U = ca.SX.sym('U', n_controls, N)
 
-# Plot results
-plt.figure(figsize=(12, 8))
+# coloumn vector for storing initial state and target state
+P = ca.SX.sym('P', n_states + n_states)
 
-# Plot system output and reference trajectory
-for i in range(3):
-    plt.subplot(3, 1, i + 1)
-    plt.plot(range(num_steps + 1), x_sim[:, i], label=f'State {i + 1} Output')
-    plt.plot(range(199), reference_trajectory[:, i], linestyle='dashed', label=f'Reference Trajectory {i + 1}')
-    plt.title(f'State {i + 1} Output and Reference Trajectory')
-    plt.legend()
+# state weights matrix (Q_X, Q_Y, Q_THETA)
+Q = ca.diagcat(Q_x, Q_y, Q_theta)
 
-plt.tight_layout()
-plt.show()
+# controls weights matrix
+R = ca.diagcat(R1, R2, R3, R4)
+
+# discretization model (e.g. x2 = f(x1, v, t) = x1 + v * dt)
+rot_3d_z = ca.vertcat(
+    ca.horzcat(cos(theta), -sin(theta), 0),
+    ca.horzcat(sin(theta),  cos(theta), 0),
+    ca.horzcat(         0,           0, 1)
+)
+# Mecanum wheel transfer function which can be found here: 
+# https://www.researchgate.net/publication/334319114_Model_Predictive_Control_for_a_Mecanum-wheeled_robot_in_Dynamical_Environments
+J = (wheel_radius/4) * ca.DM([
+    [         1,         1,          1,         1],
+    [        -1,         1,          1,        -1],
+    [-1/(Lx+Ly), 1/(Lx+Ly), -1/(Lx+Ly), 1/(Lx+Ly)]
+])
+# RHS = states + J @ controls * step_horizon  # Euler discretization
+RHS = rot_3d_z @ J @ controls
+# maps controls from [va, vb, vc, vd].T to [vx, vy, omega].T
+f = ca.Function('f', [states, controls], [RHS])
+
+cost_fn = 0                 # cost function
+g = X[:, 0] - P[:n_states]  # constraints in the equation
+
+# runge kutta
+for k in range(N):
+    st = X[:, k]
+    con = U[:, k]
+    cost_fn = cost_fn \
+        + (st - P[n_states:]).T @ Q @ (st - P[n_states:]) \
+        + con.T @ R @ con
+    st_next = X[:, k+1]
+    k1 = f(st, con)
+    k2 = f(st + step_horizon/2*k1, con)
+    k3 = f(st + step_horizon/2*k2, con)
+    k4 = f(st + step_horizon * k3, con)
+    st_next_RK4 = st + (step_horizon / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+    g = ca.vertcat(g, st_next - st_next_RK4)
+
+
+OPT_variables = ca.vertcat(
+    X.reshape((-1, 1)),   # Example: 3x11 ---> 33x1 where 3=states, 11=N+1
+    U.reshape((-1, 1))
+)
+nlp_prob = {
+    'f': cost_fn,
+    'x': OPT_variables,
+    'g': g,
+    'p': P
+}
+
+opts = {
+    'ipopt': {
+        'max_iter': 2000,
+        'print_level': 0,
+        'acceptable_tol': 1e-8,
+        'acceptable_obj_change_tol': 1e-6
+    },
+    'print_time': 0
+}
+
+solver = ca.nlpsol('solver', 'ipopt', nlp_prob, opts)
+
+lbx = ca.DM.zeros((n_states*(N+1) + n_controls*N, 1))
+ubx = ca.DM.zeros((n_states*(N+1) + n_controls*N, 1))
+
+lbx[0: n_states*(N+1): n_states] = -ca.inf     # X lower bound
+lbx[1: n_states*(N+1): n_states] = -ca.inf     # Y lower bound
+lbx[2: n_states*(N+1): n_states] = -ca.inf     # theta lower bound
+
+ubx[0: n_states*(N+1): n_states] = ca.inf      # X upper bound
+ubx[1: n_states*(N+1): n_states] = ca.inf      # Y upper bound
+ubx[2: n_states*(N+1): n_states] = ca.inf      # theta upper bound
+
+lbx[n_states*(N+1):] = v_min                  # v lower bound for all V
+ubx[n_states*(N+1):] = v_max                  # v upper bound for all V
+
+
+args = {
+    'lbg': ca.DM.zeros((n_states*(N+1), 1)),  # constraints lower bound
+    'ubg': ca.DM.zeros((n_states*(N+1), 1)),  # constraints upper bound
+    'lbx': lbx,
+    'ubx': ubx
+}
+
+t0 = 0
+state_init = ca.DM([x_init, y_init, theta_init])        # initial state
+state_target = ca.DM([x_target, y_target, theta_target])  # target state
+
+# xx = DM(state_init)
+t = ca.DM(t0)
+
+u0 = ca.DM.zeros((n_controls, N))  # initial control
+X0 = ca.repmat(state_init, 1, N+1)         # initial state full
+
+
+mpc_iter = 0
+cat_states = DM2Arr(X0)
+cat_controls = DM2Arr(u0[:, 0])
+times = np.array([[0]])
+
+
+###############################################################################
+
+if __name__ == '__main__':
+    main_loop = time()  # return time in sec
+    while (ca.norm_2(state_init - state_target) > 1e-1) and (mpc_iter * step_horizon < sim_time):
+        t1 = time()
+        args['p'] = ca.vertcat(
+            state_init,    # current state
+            state_target   # target state
+        )
+        # optimization variable current state
+        args['x0'] = ca.vertcat(
+            ca.reshape(X0, n_states*(N+1), 1),
+            ca.reshape(u0, n_controls*N, 1)
+        )
+
+        sol = solver(
+            x0=args['x0'],
+            lbx=args['lbx'],
+            ubx=args['ubx'],
+            lbg=args['lbg'],
+            ubg=args['ubg'],
+            p=args['p']
+        )
+
+        u = ca.reshape(sol['x'][n_states * (N + 1):], n_controls, N)
+        X0 = ca.reshape(sol['x'][: n_states * (N+1)], n_states, N+1)
+
+        cat_states = np.dstack((
+            cat_states,
+            DM2Arr(X0)
+        ))
+
+        cat_controls = np.vstack((
+            cat_controls,
+            DM2Arr(u[:, 0])
+        ))
+        t = np.vstack((
+            t,
+            t0
+        ))
+
+        t0, state_init, u0 = shift_timestep(step_horizon, t0, state_init, u, f)
+
+        # print(X0)
+        X0 = ca.horzcat(
+            X0[:, 1:],
+            ca.reshape(X0[:, -1], -1, 1)
+        )
+
+        # xx ...
+        t2 = time()
+        print(mpc_iter)
+        print(t2-t1)
+        times = np.vstack((
+            times,
+            t2-t1
+        ))
+
+        mpc_iter = mpc_iter + 1
+
+    main_loop_time = time()
+    ss_error = ca.norm_2(state_init - state_target)
+
+    print('\n\n')
+    print('Total time: ', main_loop_time - main_loop)
+    print('avg iteration time: ', np.array(times).mean() * 1000, 'ms')
+    print('final error: ', ss_error)
+
+    # simulate
+    simulate(cat_states, cat_controls, times, step_horizon, N,
+             np.array([x_init, y_init, theta_init, x_target, y_target, theta_target]), save=False)

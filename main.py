@@ -24,8 +24,8 @@ dock_instance = Dock()
 image_path = os.path.join(os.getcwd(), "bot.png")
 image = pygame.image.load(image_path)
 
-fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 10))  # Create a main figure with two subplots
-plt.ion()  # Turn on interactive mode for animation
+#fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 10))  # Create a main figure with two subplots
+#plt.ion()  # Turn on interactive mode for animation
 
 pygame.display.flip()
 
@@ -74,6 +74,7 @@ def draw_trajectory():
             pygame.draw.line(screen, (255, 255, 255), pointList[i], pointList[i + 1])
         pygame.draw.line(screen, (255, 255, 255), pointList[-1], pointList[0])
 
+
 v = []
 ii = []
 xx = []
@@ -104,27 +105,27 @@ while run:
             print(trajectory)
 
     if player is not None:
-        player.move_and_rotate(1, screen)
-        ii.append(player.ii)
-        v.append(player.c[player.ii - 1])
-        xx.append(player.x_sim[player.ii - 1])
-        yy.append(trajectory[player.ii - 1])
-        ax1.clear()
-        ax1.plot(ii, v, marker='o', label='step_time')  # Plot on the first subplot
-        ax1.legend()
-        ax2.clear()
-        ax2.plot(ii, [x[0] for x in xx], marker='o', color='green', label='X_sim')  # Plot on the second subplot for yy
-        ax2.plot(ii, [x[1] for x in xx], marker='o', color='red', label='Y_sim')  # Plot on the second subplot for yy
-
-        ax2.plot(ii, [y[0] for y in yy], marker='x', color='green', label='X_ref')  # Plot on the second subplot for yy
-        ax2.plot(ii, [y[1] for y in yy], marker='x', color='red', label='Y_ref')  # Plot on the second subplot for yy
-
-        ax2.legend()
-        ax3.clear()
-        ax3.plot(ii, [y[2] for y in yy], marker='o', color='green', label='Angle_ref')  # Plot on the third subplot for angles
-        ax3.plot(ii, [x[2] for x in xx], marker='x', color='red', label='Angle_sim')  # Plot on the third subplot for angles
-        ax3.set_ylim(-math.pi, math.pi)
-        plt.pause(0.001)  # Pause to allow
+        player.move_and_rotate(0.1, screen)
+        # ii.append(player.ii)
+        # v.append(player.c[player.ii - 1])
+        # xx.append(player.x_sim[player.ii - 1])
+        # yy.append(trajectory[player.ii - 1])
+        # ax1.clear()
+        # ax1.plot(ii, v, marker='o', label='step_time')  # Plot on the first subplot
+        # ax1.legend()
+        # ax2.clear()
+        # ax2.plot(ii, [x[0] for x in xx], marker='o', color='green', label='X_sim')  # Plot on the second subplot for yy
+        # ax2.plot(ii, [x[1] for x in xx], marker='o', color='red', label='Y_sim')  # Plot on the second subplot for yy
+        #
+        # ax2.plot(ii, [y[0] for y in yy], marker='x', color='green', label='X_ref')  # Plot on the second subplot for yy
+        # ax2.plot(ii, [y[1] for y in yy], marker='x', color='red', label='Y_ref')  # Plot on the second subplot for yy
+        #
+        # ax2.legend()
+        # ax3.clear()
+        # ax3.plot(ii, [y[2] for y in yy], marker='o', color='green', label='Angle_ref')  # Plot on the third subplot for angles
+        # ax3.plot(ii, [x[2] for x in xx], marker='x', color='red', label='Angle_sim')  # Plot on the third subplot for angles
+        # ax3.set_ylim(-math.pi, math.pi)
+        # plt.pause(0.001)  # Pause to allow
 
     pygame.display.flip()
     clock.tick(15)
