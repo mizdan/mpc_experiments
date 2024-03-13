@@ -8,7 +8,7 @@ from simulation_code import simulate
 # setting matrix_weights' variables
 Q_x = 100
 Q_y = 100
-Q_theta = 2000
+Q_theta = 1
 R1 = 1
 R2 = 1
 R3 = 1
@@ -62,15 +62,11 @@ states = ca.vertcat(
 n_states = states.numel()
 
 # control symbolic variables
-V_a = ca.SX.sym('V_a')
-V_b = ca.SX.sym('V_b')
-V_c = ca.SX.sym('V_c')
-V_d = ca.SX.sym('V_d')
+v = ca.SX.sym('v')
+w = ca.SX.sym('w')
 controls = ca.vertcat(
-    V_a,
-    V_b,
-    V_c,
-    V_d
+    v,
+    w
 )
 n_controls = controls.numel()
 
@@ -87,7 +83,7 @@ P = ca.SX.sym('P', n_states + n_states)
 Q = ca.diagcat(Q_x, Q_y, Q_theta)
 
 # controls weights matrix
-R = ca.diagcat(R1, R2, R3, R4)
+R = ca.diagcat(R1, R2)
 
 # discretization model (e.g. x2 = f(x1, v, t) = x1 + v * dt)
 rot_3d_z = ca.vertcat(
@@ -103,7 +99,7 @@ J = (wheel_radius/4) * ca.DM([
     [-1/(Lx+Ly), 1/(Lx+Ly), -1/(Lx+Ly), 1/(Lx+Ly)]
 ])
 # RHS = states + J @ controls * step_horizon  # Euler discretization
-RHS = rot_3d_z @ J @ controls
+RHS = ca.vertcat(v*cos(theta), v*sin(theta), w)
 # maps controls from [va, vb, vc, vd].T to [vx, vy, omega].T
 f = ca.Function('f', [states, controls], [RHS])
 
@@ -118,12 +114,14 @@ for k in range(N):
         + (st - P[n_states:]).T @ Q @ (st - P[n_states:]) \
         + con.T @ R @ con
     st_next = X[:, k+1]
-    k1 = f(st, con)
-    k2 = f(st + step_horizon/2*k1, con)
-    k3 = f(st + step_horizon/2*k2, con)
-    k4 = f(st + step_horizon * k3, con)
-    st_next_RK4 = st + (step_horizon / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
-    g = ca.vertcat(g, st_next - st_next_RK4)
+    # k1 = f(st, con)
+    # k2 = f(st + step_horizon/2*k1, con)
+    # k3 = f(st + step_horizon/2*k2, con)
+    # k4 = f(st + step_horizon * k3, con)
+    # st_next_RK4 = st + (step_horizon / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+    f_value = f(st, con)
+    st_next_euler = st + f_value
+    g = ca.vertcat(g, st_next-st_next_euler)
 
 
 OPT_variables = ca.vertcat(

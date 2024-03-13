@@ -1,8 +1,13 @@
 import pygame
 import numpy as np
-
 import math
 import casadi as ca
+from casadi import sin, cos, pi
+
+
+def DM2Arr(dm):
+    return np.array(dm.full())
+
 
 class Shape:
     def __init__(self, color, width, length):
@@ -12,7 +17,6 @@ class Shape:
 
     def draw(self, screen, width):
         raise NotImplementedError("draw method must be implemented in subclass")
-
 class Dock(Shape):
     dock_color = (255, 0, 0)
     dock_length = 50
@@ -25,118 +29,201 @@ class Dock(Shape):
         pygame.draw.rect(screen, self.dock_color, pygame.Rect(width / 2 - self.dock_length / 2, 0, self.dock_length, self.dock_width))
         pygame.draw.line(screen, self.dock_color, (width / 2, 0), (width / 2, 200))
         pass
-
 class Player(pygame.sprite.Sprite):
+    # setting matrix_weights' variables
+    Q_x = 100
+    Q_y = 100
+    Q_theta = 0.1
+    R1 = 1
+    R2 = 1
+
+    step_horizon = 0.1  # time between steps in seconds
+    N = 10  # number of look ahead steps
+
+    # specs
+    x_init = 50
+    y_init = 50
+    theta_init = 0
+
+
+    v_max = 5
+    v_min = -5
+    theta_min = -2
+    theta_max = 2
+
     # Control input constraints (linear speed and angular speed)
-    v_min, omega_min = -5, -2
-    v_max, omega_max = 5, 2
+    x = ca.SX.sym('x')
+    y = ca.SX.sym('y')
+    theta = ca.SX.sym('theta')
+    states = ca.vertcat(x, y, theta)
+    n_states = states.numel()
+    #v = v0 + a*t
+    # control symbolic variables
+    v = ca.SX.sym('v')
+    w = ca.SX.sym('w')
+    controls = ca.vertcat(v, w)
+    n_controls = controls.numel()
 
-    # Define cost matrices and prediction horizon
-    Q = np.diag([1, 1, 1])  # State cost
-    R = np.diag([1, 1])  # Control input cost
-    N = 10  # Prediction horizon
+    # matrix containing all states over all time steps +1 (each column is a state vector)
+    X = ca.SX.sym('X', n_states, N + 1)
 
-    # Initial state and reference trajectory
-    #reference_trajectory = np.ones((150, 3))
+    # matrix containing all control actions over all time steps (each column is an action vector)
+    U = ca.SX.sym('U', n_controls, N)
+
+    # coloumn vector for storing initial state and target state
+    P = ca.SX.sym('P', n_states + N * n_states)
+
+    # state weights matrix (Q_X, Q_Y, Q_THETA)
+    Q = ca.diagcat(Q_x, Q_y, Q_theta)
+
+    # controls weights matrix
+    R = ca.diagcat(R1, R2)
+
+    RHS = ca.vertcat(v * cos(theta), v * sin(theta), w)
+    # maps controls from [va, vb, vc, vd].T to [vx, vy, omega].T
+    f = ca.Function('f', [states, controls], [RHS])
+
+    cost_fn = 0  # cost function
+    st = X[:, 0]
+    g = st - P[0:3]  # constraints in the equation
+
+    # runge kutta
+    for k in range(N):
+        st = X[:, k]
+        con = U[:, k]
+        cost_fn = cost_fn \
+                  + (st - P[n_states * (k + 1): n_states + n_states * (k + 1)]).T @ Q @ (st - P[n_states * (k + 1): n_states + n_states * (k + 1)]) \
+                  + con.T @ R @ con
+        st_next = X[:, k + 1]
+        # k1 = f(st, con)
+        # k2 = f(st + step_horizon/2*k1, con)
+        # k3 = f(st + step_horizon/2*k2, con)
+        # k4 = f(st + step_horizon * k3, con)
+        # st_next_RK4 = st + (step_horizon / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+        f_value = f(st, con)
+        st_next_euler = st + 0.5 * f_value
+        g = ca.vertcat(g, st_next - st_next_euler)
+
+    OPT_variables = ca.vertcat(X.reshape((-1, 1)), U.reshape((-1, 1)))
+    nlp_prob = {
+        'f': cost_fn,
+        'x': OPT_variables,
+        'g': g,
+        'p': P
+    }
+
+    opts = {
+        'ipopt': {
+            'max_iter': 2000,
+            'print_level': 0,
+            'acceptable_tol': 1e-8,
+            'acceptable_obj_change_tol': 1e-6
+        },
+        'print_time': 0
+    }
+
+    solver = ca.nlpsol('solver', 'ipopt', nlp_prob, opts)
+
+    lbx = ca.DM.zeros((n_states * (N + 1) + n_controls * N, 1))
+    ubx = ca.DM.zeros((n_states * (N + 1) + n_controls * N, 1))
+
+    lbx[0: n_states * (N + 1): n_states] = -ca.inf  # X lower bound
+    lbx[1: n_states * (N + 1): n_states] = -ca.inf  # Y lower bound
+    lbx[2: n_states * (N + 1): n_states] = -ca.inf  # theta lower bound
+
+    ubx[0: n_states * (N + 1): n_states] = ca.inf  # X upper bound
+    ubx[1: n_states * (N + 1): n_states] = ca.inf  # Y upper bound
+    ubx[2: n_states * (N + 1): n_states] = ca.inf  # theta upper bound
+
+    lbx[n_states * (N + 1)::n_controls] = v_min  # v lower bound for all V
+    ubx[n_states * (N + 1)::n_controls] = v_max  # v upper bound for all V
+
+    lbx[1+n_states * (N + 1)::n_controls] = theta_min  # theta_min
+    ubx[1+n_states * (N + 1)::n_controls] = theta_max  # theta_max
+
+    args = {
+        'lbg': ca.DM.zeros((n_states * (N + 1), 1)),  # constraints lower bound
+        'ubg': ca.DM.zeros((n_states * (N + 1), 1)),  # constraints upper bound
+        'lbx': lbx,
+        'ubx': ubx
+    }
+
+    t0 = 0
+    state_init = ca.DM([x_init, y_init, theta_init])  # initial state
+
+    t = ca.DM(t0)
+
+    u0 = ca.DM.zeros((n_controls, N))  # initial control
+    X0 = ca.repmat(state_init, 1, N + 1)  # initial state full
+
+    mpc_iter = 0
+    cat_states = DM2Arr(X0)
+    cat_controls = DM2Arr(u0[:, 0])
+    times = np.array([[0]])
     ii = 0
+    x_sim = []
     c = []
-    opti = ca.Opti()
-
-    def __init__(self, image, x, y, reference_trajectory):
+    def __init__(self, dt, reference_trajectory):
         pygame.sprite.Sprite.__init__(self)
-        self.original_image = image
-        self.image = self.original_image
-        self.rect = self.image.get_rect(center=(x, y))
-        self.angle = 0
-        self.x = x
-        self.y = y
+        self.dt = dt
         self.reference_trajectory = reference_trajectory
-        #self.x_sim = ca.SX.sym('x_sim', 3, (len(self.reference_trajectory) + 1))
-        self.x_sim = np.zeros((len(self.reference_trajectory) + 1, 3))
-        dx = reference_trajectory[0][0] - 2 - reference_trajectory[0][0]
-        dy = reference_trajectory[0][1] + 2 - reference_trajectory[0][1]
-        angle = math.atan2(dy, dx)
-        self.x_sim[0:3] = [reference_trajectory[0][0]-2, reference_trajectory[0][1]+2, angle]
-        self.u_sim = ca.SX.sym('u_sim', 2, len(self.reference_trajectory))
+        self.state_target = ca.DM([reference_trajectory[0][0],
+                                  reference_trajectory[0][1],
+                                  reference_trajectory[0][2]])  # target state
 
-    def move_and_rotate(self, dt, screen):
+    def move_and_rotate(self, screen):
         v, w = self.do_commands(screen)
-        self.x = self.x + v * math.cos(self.angle) * dt
-        self.y = self.y + v * math.sin(self.angle) * dt
-        self.angle = self.angle + w * dt
-        self.image = pygame.transform.rotate(self.original_image, np.rad2deg(self.angle + np.pi/2))
-        self.rect = self.image.get_rect(center=(self.x, self.y))
-
-    def draw(self, screen):
-        screen.blit(self.image, self.rect)
-        self.rect = self.image.get_rect(center=self.rect.center)
-        for i in range(self.ii - 1):
-            pygame.draw.line(screen, (0, 0, 0), self.x_sim[i][0:2], self.x_sim[i+1][0:2])
-
-    def draw_prediction_horizon(self, screen, xi, i):
-        pygame.draw.line(screen, (0, 0, 0), xi[i][0:2], xi[i + 1][0:2])
 
     def do_commands(self, screen):
-        A = np.array([[1.0, 0, 0],
-                      [0, 1.0, 0],
-                      [0, 0, 1.0]])
-
-
-        # Define symbolic variables for x and u
-        x = self.opti.variable(3, self.N + 1)
-        u = self.opti.variable(2, self.N)
-
-        # Get theta and B
-        B = np.array([[np.cos(self.x_sim[self.ii][2]), 0],
-                      [-np.sin(self.x_sim[self.ii][2]), 0],
-                      [0, 1]])
-
-        min_distance = np.inf
-        k_min = None
-        current_distance = 0
-        for idx in range(0, 5):
-            if 0 <= self.ii + idx < len(self.x_sim) and self.ii + idx < len(self.reference_trajectory):
-                dx = self.reference_trajectory[self.ii + idx][0] - self.x_sim[self.ii + idx][0]
-                dy = self.reference_trajectory[self.ii + idx][1] - self.x_sim[self.ii + idx][1]
-                current_distance = dx ** 2 + dy ** 2
-            if current_distance < min_distance:
-                min_distance = current_distance
-                k_min = self.ii
-
-        # Define cost
-        cost = 0
-        for i in range(self.N):
-            dx = self.x - self.reference_trajectory[int(self.ii + i)][0]
-            dy = self.y - self.reference_trajectory[int(self.ii + i)][1]
-            cost += (x[:, i] -  self.reference_trajectory[int(k_min + i)]).T @ self.Q @ (
-                        x[:, i] -  self.reference_trajectory[int(k_min + i)]) + u[:, i].T @ self.R @ u[:, i]
-
-        # Define constraints
-        self.opti.subject_to(x[:, 0] == self.x_sim[self.ii])
+        self.args['p'] = ca.vertcat(self.state_init)
 
         for i in range(self.N):
-            self.opti.subject_to(x[:, i + 1] == A @ x[:, i] + B @ u[:, i])
-            self.opti.subject_to(u[0, i] >= self.v_min)
-            self.opti.subject_to(u[0, i] <= self.v_max)
-            self.opti.subject_to(u[1, i] >= self.omega_min)
-            self.opti.subject_to(u[1, i] <= self.omega_max)
+            self.args['p'] = ca.vertcat(self.args['p'], self.reference_trajectory[i + self.ii][0])
+            self.args['p'] = ca.vertcat(self.args['p'], self.reference_trajectory[i + self.ii][1])
+            self.args['p'] = ca.vertcat(self.args['p'], self.reference_trajectory[i + self.ii][2])
+        # optimization variable current state
+        self.args['x0'] = ca.vertcat(
+            ca.reshape(self.X0, self.n_states * (self.N + 1), 1),
+            ca.reshape(self.u0, self.n_controls * self.N, 1)
+        )
 
+        sol = self.solver(
+            x0=self.args['x0'],
+            lbx=self.args['lbx'],
+            ubx=self.args['ubx'],
+            lbg=self.args['lbg'],
+            ubg=self.args['ubg'],
+            p=self.args['p']
+        )
 
-        # Set objective and solve
-        self.opti.minimize(cost)
-        self.opti.solver('ipopt')
-        sol = self.opti.solve()
+        u = ca.reshape(sol['x'][self.n_states * (self.N + 1):], self.n_controls, self.N)
+        X0 = ca.reshape(sol['x'][: self.n_states * (self.N + 1)], self.n_states, self.N + 1)
 
-        # Get the optimal control input
-        optimal_u = sol.value(u[:, 0])
-        x_optimized = sol.value(x)
+        cat_states = np.dstack((
+            self.cat_states,
+            DM2Arr(X0)
+        ))
+
+        cat_controls = np.vstack((
+            self.cat_controls,
+            DM2Arr(u[:, 0])
+        ))
+        f_value = self.f(self.state_init, u[:, 0])
+        next_state = ca.DM.full(self.state_init + (0.5 * f_value))
+        self.state_init = next_state
+        u0 = ca.horzcat(
+            u[:, 1:],
+            ca.reshape(u[:, -1], -1, 1)
+        )
+        X0 = ca.horzcat(
+            X0[:, 1:],
+            ca.reshape(X0[:, -1], -1, 1)
+        )
+        x_optimized = DM2Arr(X0)
 
         for i in range(x_optimized.shape[1]):
             pygame.draw.circle(screen, (106, 90, 205), (int(x_optimized[0, i]), int(x_optimized[1, i])), 1)
-
-        # Simulate the system with the optimal control input
-        self.x_sim[self.ii + 1] = A @ self.x_sim[self.ii] + B @ optimal_u
-        self.u_sim[:, self.ii] = optimal_u
+        #print(X0)
+        self.x_sim.append([x_optimized[0, 0], x_optimized[1, 0], x_optimized[2, 0]])
         self.ii += 1
-        return optimal_u[0], optimal_u[1]
-
+        return 0, 1
