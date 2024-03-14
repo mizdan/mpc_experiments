@@ -106,7 +106,7 @@ while run:
     if player is not None:
         player.move_and_rotate(screen)
 
-        print("Here")
+        # print("Here")
         ii.append(player.ii)
         xx.append(player.x_sim[player.ii - 1])
         yy.append(trajectory[player.ii - 1])

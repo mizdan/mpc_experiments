@@ -38,16 +38,15 @@ class Player(pygame.sprite.Sprite):
     R2 = 1
 
     step_horizon = 0.1  # time between steps in seconds
-    N = 10  # number of look ahead steps
+    N = 20  # number of look ahead steps
 
     # specs
     x_init = 50
     y_init = 50
     theta_init = 0
 
-
-    v_max = 5
-    v_min = -5
+    v_max = 20
+    v_min = -20
     theta_min = -2
     theta_max = 2
 
@@ -66,16 +65,13 @@ class Player(pygame.sprite.Sprite):
 
     # matrix containing all states over all time steps +1 (each column is a state vector)
     X = ca.SX.sym('X', n_states, N + 1)
-
     # matrix containing all control actions over all time steps (each column is an action vector)
     U = ca.SX.sym('U', n_controls, N)
-
     # coloumn vector for storing initial state and target state
     P = ca.SX.sym('P', n_states + N * n_states)
 
     # state weights matrix (Q_X, Q_Y, Q_THETA)
     Q = ca.diagcat(Q_x, Q_y, Q_theta)
-
     # controls weights matrix
     R = ca.diagcat(R1, R2)
 
@@ -101,8 +97,11 @@ class Player(pygame.sprite.Sprite):
         # k4 = f(st + step_horizon * k3, con)
         # st_next_RK4 = st + (step_horizon / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
         f_value = f(st, con)
-        st_next_euler = st + 0.5 * f_value
+        st_next_euler = st + 0.1 * f_value
         g = ca.vertcat(g, st_next - st_next_euler)
+        if k < N-1:
+            g = ca.vertcat(g, ca.minus(-0.4, ca.minus(U[0, k+1], U[0, k]) / 0.1))
+            g = ca.vertcat(g, ca.minus(ca.minus(U[0, k+1], U[0, k]) / 0.1, 0.4))
 
     OPT_variables = ca.vertcat(X.reshape((-1, 1)), U.reshape((-1, 1)))
     nlp_prob = {
@@ -126,6 +125,17 @@ class Player(pygame.sprite.Sprite):
 
     lbx = ca.DM.zeros((n_states * (N + 1) + n_controls * N, 1))
     ubx = ca.DM.zeros((n_states * (N + 1) + n_controls * N, 1))
+    # Define constraints
+    # constraints = [x[0] == x0]
+    # for i in range(N):
+    #     constraints += [x[i + 1] == robot_dynamics(x[i], u[i])]
+    #     constraints += [v_min <= u[i, 0], u[i, 0] <= v_max]
+    #     constraints += [omega_min <= u[i, 1], u[i, 1] <= omega_max]
+    #     if i < N - 1:
+    #         constraints += [u[i + 1, 0] - u[i, 0] <= a_max * delta_t]  # Linear acceleration constraints
+    #         constraints += [u[i + 1, 0] - u[i, 0] >= a_min * delta_t]
+    #         constraints += [u[i + 1, 1] - u[i, 1] <= alpha_max * delta_t]  # Angular acceleration constraints
+    #         constraints += [u[i + 1, 1] - u[i, 1] >= alpha_min * delta_t]
 
     lbx[0: n_states * (N + 1): n_states] = -ca.inf  # X lower bound
     lbx[1: n_states * (N + 1): n_states] = -ca.inf  # Y lower bound
@@ -142,8 +152,8 @@ class Player(pygame.sprite.Sprite):
     ubx[1+n_states * (N + 1)::n_controls] = theta_max  # theta_max
 
     args = {
-        'lbg': ca.DM.zeros((n_states * (N + 1), 1)),  # constraints lower bound
-        'ubg': ca.DM.zeros((n_states * (N + 1), 1)),  # constraints upper bound
+        'lbg': ca.DM.zeros((n_states * (N + 1) + N-1, 1)),  # constraints lower bound
+        'ubg': ca.DM.zeros((n_states * (N + 1) + N-1, 1)),  # constraints upper bound
         'lbx': lbx,
         'ubx': ubx
     }
@@ -163,6 +173,7 @@ class Player(pygame.sprite.Sprite):
     ii = 0
     x_sim = []
     c = []
+
     def __init__(self, dt, reference_trajectory):
         pygame.sprite.Sprite.__init__(self)
         self.dt = dt
@@ -209,7 +220,7 @@ class Player(pygame.sprite.Sprite):
             DM2Arr(u[:, 0])
         ))
         f_value = self.f(self.state_init, u[:, 0])
-        next_state = ca.DM.full(self.state_init + (0.5 * f_value))
+        next_state = ca.DM.full(self.state_init + (0.1 * f_value))
         self.state_init = next_state
         u0 = ca.horzcat(
             u[:, 1:],
