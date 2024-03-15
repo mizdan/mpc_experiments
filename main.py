@@ -121,7 +121,7 @@ while run:
         ax1.legend()
         ax2.clear()
         ax2.plot(ii, [y[2] for y in yy], marker='o', color='green', label='Angle_ref')  # Plot on the third subplot for angles
-        ax2.plot(ii, [x[2] for x in xx], marker='x', color='red', label='Angle_sim')  # Plot on the third subplot for angles
+        ax2.plot(ii, [-x[2] for x in xx], marker='x', color='red', label='Angle_sim')  # Plot on the third subplot for angles
         ax2.set_ylim(-math.pi, math.pi)
         plt.pause(0.1)  # Pause to allow
     plt.draw()

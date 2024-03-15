@@ -101,7 +101,7 @@ class Player(pygame.sprite.Sprite):
         g = ca.vertcat(g, st_next - st_next_euler)
         if k < N-1:
             g = ca.vertcat(g, ca.minus(-0.4, ca.minus(U[0, k+1], U[0, k]) / 0.1))
-            g = ca.vertcat(g, ca.minus(ca.minus(U[0, k+1], U[0, k]) / 0.1, 0.4))
+            #g = ca.vertcat(g, ca.minus(ca.minus(U[0, k+1], U[0, k]) / 0.1, 0.4))
 
     OPT_variables = ca.vertcat(X.reshape((-1, 1)), U.reshape((-1, 1)))
     nlp_prob = {
