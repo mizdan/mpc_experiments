@@ -31,18 +31,18 @@ class Dock(Shape):
         pass
 class Player(pygame.sprite.Sprite):
     # setting matrix_weights' variables
-    Q_x = 100
-    Q_y = 100
-    Q_theta = 0.1
-    R1 = 1
-    R2 = 1
+    Q_x = 1
+    Q_y = 1
+    Q_theta = 1
+    R1 = 100
+    R2 = 100
 
-    step_horizon = 0.1  # time between steps in seconds
-    N = 20  # number of look ahead steps
+    step_horizon = 0.5
+    N = 20
 
     # specs
-    x_init = 50
-    y_init = 50
+    x_init = 20
+    y_init = 20
     theta_init = 0
 
     v_max = 20
@@ -56,8 +56,7 @@ class Player(pygame.sprite.Sprite):
     theta = ca.SX.sym('theta')
     states = ca.vertcat(x, y, theta)
     n_states = states.numel()
-    #v = v0 + a*t
-    # control symbolic variables
+
     v = ca.SX.sym('v')
     w = ca.SX.sym('w')
     controls = ca.vertcat(v, w)
@@ -68,22 +67,26 @@ class Player(pygame.sprite.Sprite):
     # matrix containing all control actions over all time steps (each column is an action vector)
     U = ca.SX.sym('U', n_controls, N)
     # coloumn vector for storing initial state and target state
-    P = ca.SX.sym('P', n_states + N * n_states)
+    P = ca.SX.sym('P', (N + 1) * n_states)
 
     # state weights matrix (Q_X, Q_Y, Q_THETA)
     Q = ca.diagcat(Q_x, Q_y, Q_theta)
     # controls weights matrix
     R = ca.diagcat(R1, R2)
 
-    RHS = ca.vertcat(v * cos(theta), v * sin(theta), w)
+    RHS = ca.vertcat(v * cos(theta), -v * sin(theta), w)
     # maps controls from [va, vb, vc, vd].T to [vx, vy, omega].T
     f = ca.Function('f', [states, controls], [RHS])
-
+    accel_constraints = []
     cost_fn = 0  # cost function
     st = X[:, 0]
+    lbg = ca.DM([])
+    ubg = ca.DM([])
     g = st - P[0:3]  # constraints in the equation
-
+    lbg = ca.vertcat(lbg, [0, 0, 0])
+    ubg = ca.vertcat(ubg, [0, 0, 0])
     # runge kutta
+    con_prev = U[0, 0]
     for k in range(N):
         st = X[:, k]
         con = U[:, k]
@@ -96,12 +99,19 @@ class Player(pygame.sprite.Sprite):
         # k3 = f(st + step_horizon/2*k2, con)
         # k4 = f(st + step_horizon * k3, con)
         # st_next_RK4 = st + (step_horizon / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+        # Acc constraints
+        acc = (con[0] - con_prev) / step_horizon
+        g = ca.vertcat(g, acc)  # constraint on velocity acceleration
+        lbg = ca.vertcat(lbg, [-0.5])  # lower bound for velocity acceleration
+        ubg = ca.vertcat(ubg, [0.5])  # upper bound for velocity acceleration
+        con_prev = con[0]
+        # Normal constraint
         f_value = f(st, con)
-        st_next_euler = st + 0.1 * f_value
+        st_next_euler = st + step_horizon * f_value
         g = ca.vertcat(g, st_next - st_next_euler)
-        if k < N-1:
-            g = ca.vertcat(g, ca.minus(-0.4, ca.minus(U[0, k+1], U[0, k]) / 0.1))
-            #g = ca.vertcat(g, ca.minus(ca.minus(U[0, k+1], U[0, k]) / 0.1, 0.4))
+        lbg = ca.vertcat(lbg, [0, 0, 0])
+        ubg = ca.vertcat(ubg, [0, 0, 0])
+
 
     OPT_variables = ca.vertcat(X.reshape((-1, 1)), U.reshape((-1, 1)))
     nlp_prob = {
@@ -125,17 +135,6 @@ class Player(pygame.sprite.Sprite):
 
     lbx = ca.DM.zeros((n_states * (N + 1) + n_controls * N, 1))
     ubx = ca.DM.zeros((n_states * (N + 1) + n_controls * N, 1))
-    # Define constraints
-    # constraints = [x[0] == x0]
-    # for i in range(N):
-    #     constraints += [x[i + 1] == robot_dynamics(x[i], u[i])]
-    #     constraints += [v_min <= u[i, 0], u[i, 0] <= v_max]
-    #     constraints += [omega_min <= u[i, 1], u[i, 1] <= omega_max]
-    #     if i < N - 1:
-    #         constraints += [u[i + 1, 0] - u[i, 0] <= a_max * delta_t]  # Linear acceleration constraints
-    #         constraints += [u[i + 1, 0] - u[i, 0] >= a_min * delta_t]
-    #         constraints += [u[i + 1, 1] - u[i, 1] <= alpha_max * delta_t]  # Angular acceleration constraints
-    #         constraints += [u[i + 1, 1] - u[i, 1] >= alpha_min * delta_t]
 
     lbx[0: n_states * (N + 1): n_states] = -ca.inf  # X lower bound
     lbx[1: n_states * (N + 1): n_states] = -ca.inf  # Y lower bound
@@ -151,9 +150,11 @@ class Player(pygame.sprite.Sprite):
     lbx[1+n_states * (N + 1)::n_controls] = theta_min  # theta_min
     ubx[1+n_states * (N + 1)::n_controls] = theta_max  # theta_max
 
+
+
     args = {
-        'lbg': ca.DM.zeros((n_states * (N + 1) + N-1, 1)),  # constraints lower bound
-        'ubg': ca.DM.zeros((n_states * (N + 1) + N-1, 1)),  # constraints upper bound
+        'lbg': lbg,  # constraints lower bound
+        'ubg': ubg,
         'lbx': lbx,
         'ubx': ubx
     }
@@ -184,7 +185,9 @@ class Player(pygame.sprite.Sprite):
 
     def move_and_rotate(self, screen):
         v, w = self.do_commands(screen)
+    acc = []
 
+    u_prev = 0
     def do_commands(self, screen):
         self.args['p'] = ca.vertcat(self.state_init)
 
@@ -206,26 +209,23 @@ class Player(pygame.sprite.Sprite):
             ubg=self.args['ubg'],
             p=self.args['p']
         )
-
         u = ca.reshape(sol['x'][self.n_states * (self.N + 1):], self.n_controls, self.N)
         X0 = ca.reshape(sol['x'][: self.n_states * (self.N + 1)], self.n_states, self.N + 1)
 
-        cat_states = np.dstack((
-            self.cat_states,
-            DM2Arr(X0)
-        ))
-
-        cat_controls = np.vstack((
-            self.cat_controls,
-            DM2Arr(u[:, 0])
-        ))
+        if self.ii > 1:
+         print((u[0, 0] - self.u_prev)/self.step_horizon)
+        self.u_prev = u[0, 0]
         f_value = self.f(self.state_init, u[:, 0])
-        next_state = ca.DM.full(self.state_init + (0.1 * f_value))
+        next_state = ca.DM.full(self.state_init + (self.step_horizon * f_value))
         self.state_init = next_state
         u0 = ca.horzcat(
             u[:, 1:],
             ca.reshape(u[:, -1], -1, 1)
         )
+        uu0 = DM2Arr(u0)
+        self.acc.append(uu0[0, 0])
+
+
         X0 = ca.horzcat(
             X0[:, 1:],
             ca.reshape(X0[:, -1], -1, 1)
@@ -233,8 +233,9 @@ class Player(pygame.sprite.Sprite):
         x_optimized = DM2Arr(X0)
 
         for i in range(x_optimized.shape[1]):
-            pygame.draw.circle(screen, (106, 90, 205), (int(x_optimized[0, i]), int(x_optimized[1, i])), 1)
+            pygame.draw.circle(screen, (106, 90, 205), (int(x_optimized[0, i]), int(x_optimized[1, i])), 2)
         #print(X0)
         self.x_sim.append([x_optimized[0, 0], x_optimized[1, 0], x_optimized[2, 0]])
+        #self.acc.append(DM2Arr(u0[0]))
         self.ii += 1
         return 0, 1
