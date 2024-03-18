@@ -60,12 +60,13 @@ def create_route():
         extended_matrix = np.hstack((matrix, zero_column))
         extended_matrix = np.round(extended_matrix)
 
-        for _ in range(len(extended_matrix) - 4):
-            dx = extended_matrix[_ + 4][0] - extended_matrix[_][0]
-            dy = extended_matrix[_ + 4][1] - extended_matrix[_][1]
+        for _ in range(len(extended_matrix) - 1):
+            dx = extended_matrix[_ + 1][0] - extended_matrix[_][0]
+            dy = extended_matrix[_ + 1][1] - extended_matrix[_][1]
             angle = sign * math.atan2(dy, dx)
             extended_matrix[_][2] = angle
         print("Len = " + str(len(extended_matrix)))
+
         return extended_matrix
 
 
@@ -80,7 +81,7 @@ ii = []
 xx = []
 yy = []
 aa = []
-
+trajectory =[]
 while run:
     draw_bg()
     draw_points()
@@ -103,6 +104,8 @@ while run:
             print(trajectory)
 
     if player is not None:
+        #player = Player(0.1, trajectory)
+        #player.prediction_horizon()
         player.move_and_rotate(screen)
 
         # print("Here")
